@@ -20,10 +20,13 @@ from report_generator import generate_pdf_report
 app = FastAPI()
 
 # ADD THIS BLOCK
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        os.getenv("FRONTEND_URL", "http://localhost:5173"),
+        frontend_url,
+        "http://localhost:5173",  # local dev
     ],
     allow_methods=["*"],
     allow_headers=["*"],
