@@ -13,21 +13,22 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   const runDemoAudit = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_URL}/api/demo-audit`, {  // ✅ both backticks
-        method: "POST",
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setAuditReport(data);
-      setPage("report");
-    } catch (e) {
-      alert("Backend unreachable. Check your VITE_API_URL environment variable.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  setLoading(true);
+  try {
+    const API_URL = import.meta.env.VITE_API_URL;
+    const res = await fetch(`${API_URL}/api/demo-audit`, {
+      method: "GET",  // ✅ changed from POST to GET
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    setAuditReport(data);
+    setPage("report");
+  } catch (e) {
+    alert("Backend unreachable. Check your VITE_API_URL environment variable.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="app">
