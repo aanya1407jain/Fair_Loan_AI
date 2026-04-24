@@ -17,23 +17,22 @@ from audit_engine import run_audit
 from data_generator import generate_synthetic_data
 from report_generator import generate_pdf_report
 
+app = FastAPI()
+
+# ADD THIS BLOCK
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://fair-loan-ai.vercel.app"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ... rest of your existing routes below
+
 app = FastAPI(
     title="Fair Loan AI — Bias Audit Engine",
     description="Credit scoring bias auditor for Indian banking models",
     version="1.0.0"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-    "http://localhost:3000", 
-    "http://127.0.0.1:3000", 
-    "http://localhost:5173",
-    "http://127.0.0.1:5173"
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 REPORTS_DIR = Path("./reports")
