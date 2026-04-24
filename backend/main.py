@@ -17,30 +17,28 @@ from audit_engine import run_audit
 from data_generator import generate_synthetic_data
 from report_generator import generate_pdf_report
 
-app = FastAPI()
-
-# ADD THIS BLOCK
-frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        frontend_url,
-        "http://localhost:5173",  # local dev
-    ],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# ✅ Only ONE app definition — with title here
 app = FastAPI(
     title="Fair Loan AI — Bias Audit Engine",
     description="Credit scoring bias auditor for Indian banking models",
     version="1.0.0"
 )
 
+# ✅ CORS added to the ONE app
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        frontend_url,
+        "http://localhost:5173",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 REPORTS_DIR = Path("./reports")
 REPORTS_DIR.mkdir(exist_ok=True)
-
 
 @app.get("/")
 def root():
