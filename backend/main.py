@@ -22,12 +22,13 @@ app = FastAPI()
 # ADD THIS BLOCK
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://fair-loan-ai.vercel.app"],
+    allow_origins=[
+        "https://fair-loan-ai.vercel.app",
+        "http://localhost:5173",  # for local dev
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ... rest of your existing routes below
 
 app = FastAPI(
     title="Fair Loan AI — Bias Audit Engine",
