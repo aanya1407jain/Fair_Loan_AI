@@ -1,9 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Dashboard from "./pages/Dashboard";
 import UploadPage from "./pages/UploadPage";
 import ReportPage from "./pages/ReportPage";
 import Navbar from "./components/Navbar";
 import "./App.css";
+
+const API_URL = import.meta.env.VITE_API_URL;  // ← define once at top
 
 export default function App() {
   const [page, setPage] = useState("dashboard");
@@ -13,13 +15,15 @@ export default function App() {
   const runDemoAudit = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/demo-audit");
+      const res = await fetch(`${API_URL}/api/demo-audit`, {  // ✅ both backticks
+        method: "POST",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setAuditReport(data);
       setPage("report");
     } catch (e) {
-      alert("Backend not running or unreachable.\n\nFix:\n1. Open a new terminal\n2. cd backend\n3. pip install -r requirements.txt\n4. uvicorn main:app --reload\n\nThen try again.");
+      alert("Backend unreachable. Check your VITE_API_URL environment variable.");
     } finally {
       setLoading(false);
     }
