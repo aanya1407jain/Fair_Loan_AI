@@ -31,7 +31,9 @@ export default function UploadPage({ setAuditReport, setPage }) {
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("/api/upload-model", {
+      // ✅ New — uses environment variable
+      const API_URL = import.meta.env.VITE_API_URL;
+      const res = await fetch(`${API_URL}/api/upload-model`, {
         method: "POST",
         body: form,
       });
