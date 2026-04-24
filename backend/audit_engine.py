@@ -10,19 +10,22 @@ import pandas as pd
 from typing import Optional, Dict, Any
 from datetime import datetime
 import uuid
-import json
 import warnings
 warnings.filterwarnings("ignore")
 
+FEATURE_COLS = [
+    "cibil_score",
+    "monthly_income",
+    "loan_amount",
+    "debt_to_income_ratio",
+    "existing_loans",
+    "credit_history_years",
+    "num_late_payments",
+]
 
 # ── Fairness metric functions ──────────────────────────────────────────────
 
-def disparate_impact_ratio(y_pred: np.ndarray, sensitive: np.ndarray,
-                            privileged_val: str) -> Dict:
-    """
-    DI = P(Ŷ=1 | unprivileged) / P(Ŷ=1 | privileged)
-    A value < 0.8 indicates disparate impact (4/5 rule).
-    """
+def disparate_impact_ratio(y_pred, sensitive, privileged_val):
     results = {}
     groups = np.unique(sensitive)
     priv_mask = sensitive == privileged_val
@@ -39,17 +42,12 @@ def disparate_impact_ratio(y_pred: np.ndarray, sensitive: np.ndarray,
             "di_ratio": round(float(di), 4),
             "count": int(mask.sum()),
             "approved": int(y_pred[mask].sum()),
-            "flagged": di < 0.8 and str(g) != privileged_val
+            "flagged": di < 0.8 and str(g) != str(privileged_val)
         }
     return results
 
 
-def equal_opportunity_difference(y_true: np.ndarray, y_pred: np.ndarray,
-                                   sensitive: np.ndarray, privileged_val: str) -> Dict:
-    """
-    EOD = TPR(unprivileged) - TPR(privileged)
-    Measures if qualified applicants get equal approval rates.
-    """
+def equal_opportunity_difference(y_true, y_pred, sensitive, privileged_val):
     results = {}
     priv_mask = (sensitive == privileged_val) & (y_true == 1)
     priv_tpr = y_pred[priv_mask].mean() if priv_mask.sum() > 0 else 0
@@ -64,16 +62,12 @@ def equal_opportunity_difference(y_true: np.ndarray, y_pred: np.ndarray,
             "true_positive_rate": round(float(group_tpr), 4),
             "eod": round(float(eod), 4),
             "qualified_count": int(mask.sum()),
-            "flagged": abs(eod) > 0.1 and str(g) != privileged_val
+            "flagged": abs(eod) > 0.1 and str(g) != str(privileged_val)
         }
     return results
 
 
-def demographic_parity_difference(y_pred: np.ndarray, sensitive: np.ndarray,
-                                   privileged_val: str) -> Dict:
-    """
-    DPD = P(Ŷ=1 | unprivileged) - P(Ŷ=1 | privileged)
-    """
+def demographic_parity_difference(y_pred, sensitive, privileged_val):
     results = {}
     priv_mask = sensitive == privileged_val
     priv_rate = y_pred[priv_mask].mean() if priv_mask.sum() > 0 else 0
@@ -87,48 +81,65 @@ def demographic_parity_difference(y_pred: np.ndarray, sensitive: np.ndarray,
         results[str(g)] = {
             "approval_rate": round(float(group_rate), 4),
             "dpd": round(float(dpd), 4),
-            "flagged": abs(dpd) > 0.05 and str(g) != privileged_val
+            "flagged": abs(dpd) > 0.05 and str(g) != str(privileged_val)
         }
     return results
 
 
-def compute_overall_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
-    """Standard ML metrics."""
+def compute_overall_metrics(y_true, y_pred):
     tp = ((y_pred == 1) & (y_true == 1)).sum()
     tn = ((y_pred == 0) & (y_true == 0)).sum()
     fp = ((y_pred == 1) & (y_true == 0)).sum()
     fn = ((y_pred == 0) & (y_true == 1)).sum()
 
-    accuracy = (tp + tn) / len(y_true)
+    accuracy  = (tp + tn) / len(y_true)
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
     return {
-        "accuracy": round(float(accuracy), 4),
-        "precision": round(float(precision), 4),
-        "recall": round(float(recall), 4),
-        "f1_score": round(float(f1), 4),
-        "approval_rate": round(float(y_pred.mean()), 4),
-        "total_samples": int(len(y_true)),
+        "accuracy":       round(float(accuracy), 4),
+        "precision":      round(float(precision), 4),
+        "recall":         round(float(recall), 4),
+        "f1_score":       round(float(f1), 4),
+        "approval_rate":  round(float(y_pred.mean()), 4),
+        "total_samples":  int(len(y_true)),
         "total_approved": int(y_pred.sum()),
         "total_rejected": int((y_pred == 0).sum())
     }
 
 
-def score_severity(di_results: Dict, sensitive_attr: str) -> str:
-    """Compute overall bias severity for a sensitive attribute."""
+def score_severity(di_results, sensitive_attr):
     flagged = [v for v in di_results.values() if v.get("flagged", False)]
-    if len(flagged) == 0:
+    if not flagged:
         return "PASS"
     worst_di = min(v["di_ratio"] for v in di_results.values())
-    if worst_di < 0.6:
-        return "CRITICAL"
-    elif worst_di < 0.7:
-        return "HIGH"
-    elif worst_di < 0.8:
-        return "MEDIUM"
+    if worst_di < 0.6:  return "CRITICAL"
+    if worst_di < 0.7:  return "HIGH"
+    if worst_di < 0.8:  return "MEDIUM"
     return "LOW"
+
+
+# ── Run predictions using the uploaded model ───────────────────────────────
+
+def _predict_with_model(model, X: pd.DataFrame) -> np.ndarray:
+    """
+    Run the uploaded model on feature matrix X.
+    Tries predict_proba first (threshold 0.5), falls back to predict.
+    """
+    try:
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(X)
+            # probs shape: (n, 2) — take class-1 probability
+            if probs.ndim == 2:
+                return (probs[:, 1] >= 0.5).astype(int)
+            return (probs >= 0.5).astype(int)
+        else:
+            preds = model.predict(X)
+            return np.array(preds).astype(int)
+    except Exception as e:
+        raise ValueError(f"Model prediction failed: {e}. "
+                         f"Make sure model expects features: {FEATURE_COLS}")
 
 
 # ── Main audit function ────────────────────────────────────────────────────
@@ -136,78 +147,91 @@ def score_severity(di_results: Dict, sensitive_attr: str) -> str:
 def run_audit(df: pd.DataFrame, model=None, model_type: str = "demo") -> Dict[str, Any]:
     """
     Run full bias audit on a dataframe.
-    Returns a comprehensive bias report JSON.
+    - If model is provided (uploaded), uses it for predictions.
+    - If model is None (demo), uses the pre-baked biased predictions in df.
     """
-    audit_id = str(uuid.uuid4())[:8].upper()
+    audit_id  = str(uuid.uuid4())[:8].upper()
     timestamp = datetime.utcnow().isoformat()
 
     y_true = df["fair_approved"].values
-    y_pred = df["model_approved"].values
+
+    # ── KEY FIX: use the real model if uploaded ────────────────────
+    if model is not None:
+        X = df[FEATURE_COLS].copy()
+        # Ensure correct dtypes
+        X = X.astype({
+            "cibil_score":          float,
+            "monthly_income":       float,
+            "loan_amount":          float,
+            "debt_to_income_ratio": float,
+            "existing_loans":       float,
+            "credit_history_years": float,
+            "num_late_payments":    float,
+        })
+        y_pred = _predict_with_model(model, X)
+    else:
+        # Demo mode — use pre-generated biased predictions
+        y_pred = df["model_approved"].values
 
     # ── Overall model metrics ──────────────────────────────────────
     overall = compute_overall_metrics(y_true, y_pred)
 
     # ── Sensitive attribute audits ─────────────────────────────────
     sensitive_attrs = {
-        "gender":       {"col": "gender",      "privileged": "Male"},
-        "city_tier":    {"col": "city_tier",   "privileged": 1},
-        "religion":     {"col": "religion",    "privileged": "Hindu"},
+        "gender":    {"col": "gender",    "privileged": "Male"},
+        "city_tier": {"col": "city_tier", "privileged": 1},
+        "religion":  {"col": "religion",  "privileged": "Hindu"},
     }
 
     bias_results = {}
-
     for attr_name, cfg in sensitive_attrs.items():
-        col = cfg["col"]
+        col  = cfg["col"]
         priv = cfg["privileged"]
         sensitive = df[col].values
 
-        di = disparate_impact_ratio(y_pred, sensitive, priv)
-        eod = equal_opportunity_difference(y_true, y_pred, sensitive, priv)
-        dpd = demographic_parity_difference(y_pred, sensitive, priv)
+        di       = disparate_impact_ratio(y_pred, sensitive, priv)
+        eod      = equal_opportunity_difference(y_true, y_pred, sensitive, priv)
+        dpd      = demographic_parity_difference(y_pred, sensitive, priv)
         severity = score_severity(di, attr_name)
 
         bias_results[attr_name] = {
-            "privileged_group": str(priv),
-            "severity": severity,
-            "disparate_impact": di,
-            "equal_opportunity": eod,
-            "demographic_parity": dpd,
-            "summary": _generate_summary(attr_name, severity, di, priv)
+            "privileged_group":    str(priv),
+            "severity":            severity,
+            "disparate_impact":    di,
+            "equal_opportunity":   eod,
+            "demographic_parity":  dpd,
+            "summary":             _generate_summary(attr_name, severity, di, priv)
         }
 
-    # ── Intersectional analysis ────────────────────────────────────
     intersectional = _intersectional_analysis(df, y_pred)
-
-    # ── Mitigation suggestions ─────────────────────────────────────
-    mitigations = _generate_mitigations(bias_results)
-
-    # ── Risk score (0-100) ─────────────────────────────────────────
-    risk_score = _compute_risk_score(bias_results)
+    mitigations    = _generate_mitigations(bias_results)
+    risk_score     = _compute_risk_score(bias_results)
 
     report = {
-        "audit_id": audit_id,
-        "timestamp": timestamp,
-        "model_type": model_type,
+        "audit_id":             audit_id,
+        "timestamp":            timestamp,
+        "model_type":           model_type,
         "dataset": {
             "total_samples": int(len(df)),
-            "features": list(df.columns),
-            "source": "synthetic_indian_demographics"
+            "features":      FEATURE_COLS,
+            "source":        "synthetic_indian_demographics"
         },
-        "overall_metrics": overall,
-        "bias_analysis": bias_results,
-        "intersectional": intersectional,
-        "risk_score": risk_score,
-        "risk_level": _risk_level(risk_score),
+        "overall_metrics":       overall,
+        "bias_analysis":         bias_results,
+        "intersectional":        intersectional,
+        "risk_score":            risk_score,
+        "risk_level":            _risk_level(risk_score),
         "mitigation_suggestions": mitigations,
-        "regulatory_notes": _regulatory_notes(bias_results),
-        "rbi_compliant": bool(risk_score < 40)
+        "regulatory_notes":      _regulatory_notes(bias_results),
+        "rbi_compliant":         bool(risk_score < 40)
     }
 
     return _sanitize(report)
 
 
-def _generate_summary(attr: str, severity: str, di: Dict, priv: Any) -> str:
-    """Human-readable summary for each attribute."""
+# ── Helper functions ───────────────────────────────────────────────────────
+
+def _generate_summary(attr, severity, di, priv):
     flagged = [g for g, v in di.items() if v.get("flagged")]
     if not flagged:
         return f"No significant bias detected for {attr}."
@@ -219,12 +243,10 @@ def _generate_summary(attr: str, severity: str, di: Dict, priv: Any) -> str:
     )
 
 
-def _intersectional_analysis(df: pd.DataFrame, y_pred: np.ndarray) -> list:
-    """Cross-group analysis for intersecting protected attributes."""
+def _intersectional_analysis(df, y_pred):
     results = []
     df = df.copy()
     df["_pred"] = y_pred
-
     for gender in ["Male", "Female"]:
         for tier in [1, 2, 3]:
             mask = (df["gender"] == gender) & (df["city_tier"] == tier)
@@ -232,70 +254,79 @@ def _intersectional_analysis(df: pd.DataFrame, y_pred: np.ndarray) -> list:
                 continue
             rate = df.loc[mask, "_pred"].mean()
             results.append({
-                "gender": gender,
-                "city_tier": tier,
+                "gender":        gender,
+                "city_tier":     tier,
                 "approval_rate": round(float(rate), 4),
-                "count": int(mask.sum())
+                "count":         int(mask.sum())
             })
-
     return results
 
 
-def _generate_mitigations(bias_results: Dict) -> list:
-    """Suggest mitigation strategies based on detected biases."""
+def _generate_mitigations(bias_results):
     suggestions = []
-
     for attr, data in bias_results.items():
         if data["severity"] in ("CRITICAL", "HIGH"):
             suggestions.append({
-                "attribute": attr,
-                "technique": "Reweighting",
-                "description": f"Apply sample reweighting to up-weight underrepresented {attr} groups during training.",
+                "attribute":     attr,
+                "technique":     "Reweighting",
+                "description":   f"Apply sample reweighting to up-weight underrepresented {attr} groups during training.",
                 "fairlearn_api": "fairlearn.reductions.ExponentiatedGradient",
-                "priority": "HIGH"
+                "priority":      "HIGH"
             })
             suggestions.append({
-                "attribute": attr,
-                "technique": "Threshold Optimization",
-                "description": f"Use group-specific decision thresholds to equalize approval rates across {attr}.",
+                "attribute":     attr,
+                "technique":     "Threshold Optimization",
+                "description":   f"Use group-specific decision thresholds to equalize approval rates across {attr}.",
                 "fairlearn_api": "fairlearn.postprocessing.ThresholdOptimizer",
-                "priority": "HIGH"
+                "priority":      "HIGH"
             })
         elif data["severity"] == "MEDIUM":
             suggestions.append({
-                "attribute": attr,
-                "technique": "Calibrated Equalized Odds",
-                "description": f"Post-process predictions to satisfy equalized odds for {attr}.",
+                "attribute":     attr,
+                "technique":     "Calibrated Equalized Odds",
+                "description":   f"Post-process predictions to satisfy equalized odds for {attr}.",
                 "fairlearn_api": "fairlearn.postprocessing.ThresholdOptimizer(constraints='equalized_odds')",
-                "priority": "MEDIUM"
+                "priority":      "MEDIUM"
             })
-
     if not suggestions:
         suggestions.append({
-            "attribute": "all",
-            "technique": "Continuous Monitoring",
+            "attribute":   "all",
+            "technique":   "Continuous Monitoring",
             "description": "No critical biases detected. Implement ongoing monitoring with quarterly audits.",
-            "priority": "LOW"
+            "priority":    "LOW"
         })
-
     return suggestions
 
 
-def _compute_risk_score(bias_results: Dict) -> int:
+def _compute_risk_score(bias_results):
     severity_map = {"CRITICAL": 40, "HIGH": 25, "MEDIUM": 15, "LOW": 5, "PASS": 0}
     score = sum(severity_map.get(v["severity"], 0) for v in bias_results.values())
     return min(100, score)
 
-def _risk_level(score: int) -> str:
+
+def _risk_level(score):
     if score >= 70: return "CRITICAL"
     if score >= 50: return "HIGH"
     if score >= 30: return "MEDIUM"
     if score >= 10: return "LOW"
     return "MINIMAL"
 
+
+def _regulatory_notes(bias_results):
+    notes = [
+        "This audit follows RBI's Fair Lending Practices guidelines (Master Circular 2023).",
+        "Disparate Impact threshold of 0.8 per the 4/5ths rule (US EEOC standard, adopted as best practice).",
+    ]
+    critical = [a for a, v in bias_results.items() if v["severity"] == "CRITICAL"]
+    if critical:
+        notes.append(
+            f"CRITICAL: Attributes {critical} show significant disparate impact. "
+            "Immediate remediation required before production deployment."
+        )
+    return notes
+
+
 def _sanitize(obj):
-    """Recursively convert numpy types to native Python types for JSON serialization."""
-    import numpy as np
     if isinstance(obj, dict):
         return {k: _sanitize(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -309,25 +340,3 @@ def _sanitize(obj):
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
     return obj
-
-
-
-    if score >= 70: return "CRITICAL"
-    if score >= 50: return "HIGH"
-    if score >= 30: return "MEDIUM"
-    if score >= 10: return "LOW"
-    return "MINIMAL"
-
-
-def _regulatory_notes(bias_results: Dict) -> list:
-    notes = [
-        "This audit follows RBI's Fair Lending Practices guidelines (Master Circular 2023).",
-        "Disparate Impact threshold of 0.8 per the 4/5ths rule (US EEOC standard, adopted as best practice).",
-    ]
-    critical = [a for a, v in bias_results.items() if v["severity"] == "CRITICAL"]
-    if critical:
-        notes.append(
-            f"CRITICAL: Attributes {critical} show significant disparate impact. "
-            "Immediate remediation required before production deployment."
-        )
-    return notes
